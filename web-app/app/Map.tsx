@@ -18,6 +18,7 @@ interface Bus {
 interface BusRoute {
   line: string;
   coord: [number, number][];
+  sourceBusId?: string;
 }
 
 interface  BusStop {
@@ -63,10 +64,8 @@ const SUCEAVA_BUS_STOPS: BusStop[] = [
   { id: "ramiro", name: "Ramiro", position: [47.675144, 26.268476] },
   { id: "putna", name: "Putna", position: [47.673608, 26.266807] },
   { id: "centura", name: "Centura", position: [47.653478, 26.216904] },
-  { id: "rulmentul", name: "Rulmentul", position: [47.652425, 26.208973] },
   { id: "bloc-ire", name: "Bloc I.R.E.", position: [47.635752, 26.225468] },
   { id: "confectia", name: "Confectia", position: [47.644845, 26.243226] },
-  { id: "alimentara", name: "Alimentara Obcini", position: [47.635936, 26.229118] },
   { id: "torino-1", name: "Torino", position: [47.671070, 26.286509] },
   { id: "torino-2", name: "Torino", position: [47.671543, 26.287359] },
   { id: "depozit", name: "Depozit", position: [47.674128, 26.286894] },
@@ -89,21 +88,11 @@ const SUCEAVA_BUS_STOPS: BusStop[] = [
   { id: "universitate", name: "Universitate", position: [47.641470, 26.245936] },
   { id: "piata-burdujeni", name: "Piata Burdujeni", position: [47.670847, 26.284400] },
   { id: "aeroport", name: "Aeroport Suceava", position: [47.685726, 26.349862] },
-  { id: "eugen-dobrila-gropi", name: "Eugen Dobrila Gropi", position: [47.697393, 26.285325] },
-  { id: "eugen-dobrila-centru", name: "Eugen Dobrila Centru", position: [47.695861, 26.286901] },
   { id: "burdujeni-sat-spac", name: "Burdujeni Sat Spac", position: [47.693204, 26.291595] },
   { id: "scoala-6", name: "Scoala 6", position: [47.685696, 26.290860] },
   { id: "tabita", name: "Tabita", position: [47.680546, 26.290181] },
   { id: "piata-mare", name: "Piata Mare", position: [47.646992, 26.261166] },
   { id: "parc-policlinica", name: "Parc Policlinica", position: [47.641000, 26.248511] },
-  { id: "colegiu-alimentar", name: "Colegiul Alimentar", position: [47.647712, 26.244737] },
-  { id: "narciselor", name: "Narciselor", position: [47.650227, 26.244218] },
-  { id: "radio-as", name: "Radio As", position: [47.651363, 26.246125] },
-  { id: "casa-pensii", name: "Casa de pensii", position: [47.653799, 26.247222] },
-  { id: "pod-piatra", name: "Podul de piatra", position: [47.682412, 26.293926] },
-  { id: "plevnei", name: "Burdujeni Sat / Plevnei", position: [47.691273, 26.298899] },
-  { id: "traian-popovici", name: "Traian Popovici", position: [47.666893, 26.288315] },
-  { id: "eroilor", name: "Eroilor", position: [47.668306, 26.285459] },
   { id: "stejari", name: "La Stejari", position: [47.684973, 26.270765] },
   { id: "fabrica-sucuri", name: "Fabrica Sucuri", position: [47.680084, 26.266239] },
   { id: "colt-doja", name: "Colt Gheorghe Doja", position: [47.676737, 26.263506] },
@@ -113,15 +102,11 @@ const SUCEAVA_BUS_STOPS: BusStop[] = [
   { id: "pasarela-itcani", name: "Pasarela Itcani", position: [47.678041, 26.238278] },
   { id: "cernauti", name: "Cernauti", position: [47.653089, 26.257074] },
   { id: "cinema-modern", name: "Cinema Modern", position: [47.646362, 26.255543] },
-  { id: "dimitrie-cantemir", name: "Dimitrie Cantemir", position: [47.644931, 26.246203] },
-  { id: "zamca", name: "Hotel Zamca", position: [47.651407, 26.244795] },
-  { id: "arcadia", name: "Clinica Arcadia", position: [47.650696, 26.248782] },
-  { id: "grigore-ureche", name: "Grigore Ureche", position: [47.648750, 26.248351] },
   { id: "sf-nicolae", name: "Sfantul Nicolae", position: [47.646168, 26.256344] },
   { id: "gostat-itcani", name: "Gostat Itcani", position: [47.684900, 26.230216] },
   { id: "defelcom", name: "Defelcom", position: [47.682104, 26.234404] },
   { id: "scoala-itcani", name: "Scoala Itcani", position: [47.676510, 26.245320] },
-  { id: "centrofarm", name: "Centrofarm", position: [7.676957, 26.251409] },
+  { id: "centrofarm", name: "Centrofarm", position: [47.676957, 26.251409] },
   { id: "aleea-dumbravii", name: "Aleea Dumbravii", position: [47.676034, 26.262821] },
   { id: "iulis", name: "Iulius Mall", position: [47.658755, 26.269398] },
 ];
@@ -174,20 +159,27 @@ function createBusStopIcon() {
 export default function BusMap() {
   const [buses, setBuses] = useState<Bus[]>([]);
   const [routes, setRoutes] = useState<Record<string, BusRoute>>({});
+  const [snappedRoutes, setSnappedRoutes] = useState<Record<string, [number, number][]>>({});
+  const [selectedLine, setSelectedLine] = useState<string>("ALL");
 
+  // --- fetch buses (ONLY buses) ---
   const fetchBuses = async () => {
     const response = await fetch("/api/buses", { cache: "no-store" });
-    const data = await response.json(); 
+    if (!response.ok) return;
+
+    const data = await response.json(); // upstream-like object
 
     const updatedBuses: Bus[] = [];
 
-    Object.entries(data).forEach(([busId, busData]) => {
+    Object.entries(data as Record<string, any>).forEach(([busId, busData]) => {
       const bus = busData as any;
 
-      if (bus["1"] === "on") {
+      if (bus?.["1"] === "on") {
         const lat = parseFloat(bus["2"]);
         const lng = parseFloat(bus["3"]);
-        const line = bus["4"]?.trim();
+        const line = bus["4"]?.trim() || "?";
+
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
         updatedBuses.push({
           id: busId,
@@ -203,40 +195,100 @@ export default function BusMap() {
     setBuses(updatedBuses);
   };
 
-  // Pre-load the bus routes as polylines
-  const routePolylines = useMemo(() => {
-    return Object.entries(routes).map(([busId, route]) => {
-      if (!route?.coord || route.coord.length < 2) return null;
+  // --- fetch routes once + snap them ---
+  const fetchRoutesAndSnap = async () => {
+    const res = await fetch("/api/routes", { cache: "no-store" });
+    if (!res.ok) return;
 
-      return (
-        <Polyline
-          key={busId}
-          positions={toLatLngTupleArray(route.coord)}
-          pathOptions={{ color: "#12479E", weight: 4 }}
-        />
-      );
-    });
-  }, [routes]);
+    const data: Record<string, BusRoute> = await res.json();
+    setRoutes(data);
 
-  useEffect(() => {
-    const fetchRoutes = async () => {
-      try {
-        const res = await fetch("/api/routes", { cache: "no-store" });
-        const data: Record<string, BusRoute> = await res.json();
-        setRoutes(data);
-      } catch (err) {
-        console.error(err);
+    const entries = Object.entries(data);
+    const snapped: Record<string, [number, number][]> = {};
+
+    for (const [line, route] of entries) {
+      if (!route?.coord || route.coord.length < 2) continue;
+
+      // snap only last N points for speed
+      const lastN = route.coord.slice(-250);
+
+      const snapRes = await fetch("/api/osrm-match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ coords: lastN }),
+      });
+
+      if (!snapRes.ok) {
+        snapped[line] = lastN; // fallback
+        continue;
       }
-    };
-  
-    fetchRoutes();
+
+      const snapJson = await snapRes.json();
+
+      if (Array.isArray(snapJson.coords) && snapJson.coords.length >= 2) {
+        snapped[line] = snapJson.coords;
+      } else {
+        snapped[line] = lastN;
+      }
+    }
+
+    setSnappedRoutes(snapped);
+  };
+
+  // Initial load + polling
+  useEffect(() => {
+    fetchRoutesAndSnap();
     fetchBuses();
-  
+
     const interval = setInterval(fetchBuses, 2500);
-  
     return () => clearInterval(interval);
   }, []);
-  
+
+  const availableLines = useMemo(() => {
+    const fromRoutes = Object.keys(routes);
+    const fromBuses = buses.map((b) => b.line).filter(Boolean);
+    return Array.from(new Set([...fromRoutes, ...fromBuses]))
+      .filter((x) => x && x !== "?")
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true}));
+  }, [routes, buses]);
+
+  const filteredBuses = useMemo(() => {
+    if(selectedLine === "ALL") return buses;
+    return buses.filter((b) => b.line === selectedLine);
+  }, [buses, selectedLine]);
+
+  // Polylines prefer snapped coords
+  const routePolylines = useMemo(() => {
+    // if ALL -> show all routes
+    if (selectedLine === "ALL") {
+      return Object.entries(routes).map(([line, route]) => {
+        const coords = snappedRoutes[line] ?? route.coord;
+        if (!coords || coords.length < 2) return null;
+
+        return (
+          <Polyline
+            key={line}
+            positions={toLatLngTupleArray(coords)}
+            pathOptions={{ color: "#12479E", weight: 4 }}
+          />
+        );
+      });
+    }
+
+    // else show only selected route
+    const route = routes[selectedLine];
+    if (!route?.coord || route.coord.length < 2) return null;
+
+    const coords = snappedRoutes[selectedLine] ?? route.coord;
+
+    return (
+      <Polyline
+        key={selectedLine}
+        positions={toLatLngTupleArray(coords)}
+        pathOptions={{ color: "#12479E", weight: 5 }}
+      />
+    );
+  }, [routes, snappedRoutes, selectedLine]);
 
   const busStopMarkers = useMemo(() => {
     return SUCEAVA_BUS_STOPS.map((stop) => (
@@ -255,31 +307,114 @@ export default function BusMap() {
   }, []);
 
   return (
-    <MapContainer center={[47.67109, 26.27769]} zoom={13} scrollWheelZoom={true} preferCanvas={true}>
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        url="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png"
-      />
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      {/* UI overlay */}
+      <div
+  style={{
+    position: "absolute",
+    top: 16,
+    right: 16,
+    zIndex: 1000,
+    background: "#ffffff",
+    padding: "14px 16px",
+    borderRadius: 14,
+    boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    minWidth: 220,
+  }}
+>
+  <div
+    style={{
+      fontSize: 14,
+      fontWeight: 700,
+      color: "#1f2937",
+      letterSpacing: 0.3,
+      textAlign: "center",
+    }}
+  >
+    Linii
+  </div>
 
-      {/* Routes */}
-      {routePolylines}
+  <select
+    value={selectedLine}
+    onChange={(e) => setSelectedLine(e.target.value)}
+    style={{
+      padding: "8px 10px",
+      borderRadius: 10,
+      border: "1px solid #cbd5e1",
+      fontSize: 14,
+      background: "#ffffff",
+      color: "#111827",
+      fontWeight: 500,
+      outline: "none",
+      cursor: "pointer",
+    }}
+  >
+    <option value="ALL">Toate liniile</option>
+    {availableLines.map((line) => (
+      <option key={line} value={line}>
+        {line}
+      </option>
+    ))}
+  </select>
 
-      {/* Bus stops */}
-      {busStopMarkers}
+  {selectedLine !== "ALL" && (
+    <button
+      onClick={() => setSelectedLine("ALL")}
+      style={{
+        padding: "8px 10px",
+        borderRadius: 10,
+        border: "1px solid #e5e7eb",
+        background: "#f9fafb",
+        color: "#374151",
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: "pointer",
+      }}
+      onMouseEnter={(e) =>
+        (e.currentTarget.style.background = "#f3f4f6")
+      }
+      onMouseLeave={(e) =>
+        (e.currentTarget.style.background = "#f9fafb")
+      }
+    >
+      Sterge
+    </button>
+  )}
+</div>
 
-      {/* Buses */}
-      {buses.map((bus) => (
-        <Marker key={bus.id} position={[bus.latitude, bus.longitude]} icon={createBusIcon(bus.line)}>
-          <Popup>
-            <div>
-              <strong> Line: </strong> {bus.line || "?"} <br />
-              <strong> Coordinates: </strong> <br />
-              Lat: {bus.latitude.toFixed(6)} <br />
-              Lng: {bus.longitude.toFixed(6)} <br />
-            </div>
-          </Popup>
-        </Marker>
-      ))}
-    </MapContainer>
+      <MapContainer center={[47.67109, 26.27769]} zoom={13} scrollWheelZoom preferCanvas>
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png"
+        />
+
+        {/* Routes */}
+        {routePolylines}
+
+        {/* Bus stops */}
+        {busStopMarkers}
+
+        {/* Buses */}
+        {filteredBuses.map((bus) => (
+          <Marker
+            key={bus.id}
+            position={[bus.latitude, bus.longitude]}
+            icon={createBusIcon(bus.line)}
+          >
+            <Popup>
+              <div>
+                <strong>Line:</strong> {bus.line || "?"} <br />
+                <strong>Coordinates:</strong> <br />
+                Lat: {bus.latitude.toFixed(6)} <br />
+                Lng: {bus.longitude.toFixed(6)} <br />
+              </div>
+            </Popup>
+          </Marker>
+        ))}
+      </MapContainer>
+    </div>
   );
 }
