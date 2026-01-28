@@ -59,7 +59,7 @@ export async function GET() {
       existing[busId].coord.push([lat, lng]);
 
       // keep file size under control
-      const MAX_POINTS = 8000;
+      const MAX_POINTS = 6000;
       if (existing[busId].coord.length > MAX_POINTS) {
         existing[busId].coord = existing[busId].coord.slice(-MAX_POINTS);
       }
