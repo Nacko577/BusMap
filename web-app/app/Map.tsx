@@ -1,10 +1,14 @@
 "use client";
 
 import { MapContainer, Marker, TileLayer, Popup, Polyline } from "react-leaflet";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import type { LatLngTuple } from "leaflet";
+
+import { SUCEAVA_BUS_STOPS } from "@/lib/busStops";
+
+type LatLng = [number, number];
 
 interface Bus {
   id: string;
@@ -21,122 +25,111 @@ interface BusRoute {
   sourceBusId?: string;
 }
 
-interface BusStop {
-  id: string;
-  name: string;
-  position: [number, number];
+type PlanResponse =
+  | { ok: false; error: string }
+  | {
+      ok: true;
+      kind: "direct" | "transfer";
+      lineA: string;
+      lineB?: string;
+      boardStopId: string;
+      transferStopId?: string;
+      destStopId: string;
+      walk: LatLng[];
+      rideA: LatLng[];
+      rideB?: LatLng[];
+    };
+
+type LineMode = "BUSES_ONLY" | "ALL_ROUTES" | string;
+
+function toLatLngTupleArray(coords: LatLng[]): LatLngTuple[] {
+  return coords.map((c) => [c[0], c[1]] as LatLngTuple);
 }
 
-const SUCEAVA_BUS_STOPS: BusStop[] = [
-  { id: "cinema", name: "Cinema Burdujeni", position: [47.674534, 26.283158] },
-  { id: "orizont-1", name: "Orizont", position: [47.671512, 26.27846] },
-  { id: "orizont-2", name: "Orizont", position: [47.671554, 26.27839] },
-  { id: "iric", name: "Iric", position: [47.669977, 26.2758] },
-  { id: "carrefour-1", name: "Carrefour", position: [47.66348, 26.268229] },
-  { id: "carrefour-2", name: "Carrefour", position: [47.664137, 26.269163] },
-  { id: "bazar-1", name: "Bazar", position: [47.659398, 26.26473] },
-  { id: "bazar-2", name: "Bazar", position: [47.660635, 26.266064] },
-  { id: "sala-sporturi-1", name: "Sala Sporturilor", position: [47.65675, 26.262612] },
-  { id: "sala-sporturi-2", name: "Sala Sporturilor", position: [47.656195, 26.26185] },
-  { id: "petru-musat-1", name: "Petru Musat", position: [47.65276, 26.260102] },
-  { id: "petru-musat-2", name: "Petru Musat", position: [47.653026, 26.260349] },
-  { id: "centru-1", name: "Centru", position: [47.645007, 26.262699] },
-  { id: "centru-2", name: "Centru", position: [47.644943, 26.262692] },
-  { id: "banca-1", name: "Banca", position: [47.640853, 26.258401] },
-  { id: "banca-2", name: "Banca", position: [47.640782, 26.258611] },
-  { id: "policlinica-1", name: "Policlinica", position: [47.640655, 26.249686] },
-  { id: "policlinica-2", name: "Policlinica", position: [47.640599, 26.250251] },
-  { id: "spital", name: "Spitalul Judetean", position: [47.638321, 26.241398] },
-  { id: "obcini-flori-1", name: "Obcini flori", position: [47.639259, 26.236147] },
-  { id: "obcini-flori-2", name: "Obcini Flori", position: [47.638987, 26.236239] },
-  { id: "mobila", name: "Mobila", position: [47.641671, 26.236309] },
-  { id: "curcubeu", name: "Curcubeu", position: [47.64392, 26.240043] },
-  { id: "nordic", name: "Nordic", position: [47.645752, 26.243032] },
-  { id: "catedrala", name: "Catedrala", position: [47.646579, 26.248128] },
-  { id: "gara-burdujeni", name: "Gara Burdujeni", position: [47.671365, 26.267088] },
-  { id: "comlemn", name: "Comlemn", position: [47.674117, 26.269413] },
-  { id: "cantina-1", name: "Cantina", position: [47.674325, 26.273063] },
-  { id: "metro", name: "Metro", position: [47.636665, 26.236753] },
-  { id: "cordus", name: "Cordus", position: [47.633495, 26.228043] },
-  { id: "ion-creanga", name: "Ion Creanga", position: [47.63594, 26.231479] },
-  { id: "moldova-1", name: "Moldova", position: [47.673304, 26.277998] },
-  { id: "cantina-2", name: "Cantina", position: [47.674278, 26.273629] },
-  { id: "ramiro", name: "Ramiro", position: [47.675144, 26.268476] },
-  { id: "putna", name: "Putna", position: [47.673608, 26.266807] },
-  { id: "centura", name: "Centura", position: [47.653478, 26.216904] },
-  { id: "bloc-ire", name: "Bloc I.R.E.", position: [47.635752, 26.225468] },
-  { id: "confectia", name: "Confectia", position: [47.644845, 26.243226] },
-  { id: "torino-1", name: "Torino", position: [47.67107, 26.286509] },
-  { id: "torino-2", name: "Torino", position: [47.671543, 26.287359] },
-  { id: "depozit", name: "Depozit", position: [47.674128, 26.286894] },
-  { id: "spital-neuro", name: "Spital Neuro", position: [47.675638, 26.286902] },
-  { id: "gara-itcani", name: "Gara Itcani", position: [47.67581, 26.236741] },
-  { id: "pasarela", name: "Pasarela", position: [47.674954, 26.240714] },
-  { id: "straduinta", name: "Straduinta", position: [47.673506, 26.243686] },
-  { id: "betty-ice", name: "Betty Ice", position: [47.669486, 26.242919] },
-  { id: "petrom-1", name: "Petrom", position: [47.665321, 26.245956] },
-  { id: "petrom-2", name: "Petrom", position: [47.664745, 26.246531] },
-  { id: "autogara", name: "Autogara", position: [47.661197, 26.251567] },
-  { id: "autobaza-tpl", name: "Autobaza TPL", position: [47.66133, 26.251033] },
-  { id: "sticla-1", name: "Sticla", position: [47.658297, 26.256241] },
-  { id: "sticla-2", name: "Sticla", position: [47.657852, 26.257459] },
-  { id: "selgros", name: "Selgros", position: [47.668214, 26.244019] },
-  { id: "coramed", name: "Coramed", position: [47.632214, 26.226952] },
-  { id: "castel", name: "Castelul de apa", position: [47.632214, 26.226952] },
-  { id: "profi", name: "Profi", position: [47.628222, 26.217233] },
-  { id: "universitar-moara", name: "Campus Universitar Moara", position: [47.618179, 26.209817] },
-  { id: "universitate", name: "Universitate", position: [47.64147, 26.245936] },
-  { id: "piata-burdujeni", name: "Piata Burdujeni", position: [47.670847, 26.2844] },
-  { id: "aeroport", name: "Aeroport Suceava", position: [47.685726, 26.349862] },
-  { id: "burdujeni-sat-spac", name: "Burdujeni Sat Spac", position: [47.693204, 26.291595] },
-  { id: "scoala-6", name: "Scoala 6", position: [47.685696, 26.29086] },
-  { id: "tabita", name: "Tabita", position: [47.680546, 26.290181] },
-  { id: "piata-mare", name: "Piata Mare", position: [47.646992, 26.261166] },
-  { id: "parc-policlinica", name: "Parc Policlinica", position: [47.641, 26.248511] },
-  { id: "pompe-apa", name: "Pompe Apa", position: [47.697686, 26.24466] },
-  { id: "restaurant-Claudia", name: "Restaurant Claudia", position: [47.691485, 26.242767] },
-  { id: "moara-veche", name: "Moara Veche", position: [47.68772, 26.241552] },
-  { id: "pasarela-itcani", name: "Pasarela Itcani", position: [47.678041, 26.238278] },
-  { id: "cinema-modern", name: "Cinema Modern", position: [47.646362, 26.255543] },
-  { id: "sf-nicolae", name: "Sfantul Nicolae", position: [47.646168, 26.256344] },
-  { id: "gostat-itcani", name: "Gostat Itcani", position: [47.6849, 26.230216] },
-  { id: "defelcom", name: "Defelcom", position: [47.682104, 26.234404] },
-  { id: "scoala-itcani", name: "Scoala Itcani", position: [47.67651, 26.24532] },
-  { id: "centrofarm", name: "Centrofarm", position: [47.676957, 26.251409] },
-  { id: "aleea-dumbravii", name: "Aleea Dumbravii", position: [47.676034, 26.262821] },
-  { id: "iulis", name: "Iulius Mall", position: [47.658755, 26.269398] },
-];
-
-function toLatLngTupleArray(coords: [number, number][]): LatLngTuple[] {
-  return coords
-    .filter((c) => Array.isArray(c) && c.length === 2)
-    .map((c) => [c[0], c[1]] as LatLngTuple);
+// ---------- math helpers ----------
+function approxMetersPerDegLng(latDeg: number) {
+  return 111320 * Math.cos((latDeg * Math.PI) / 180);
+}
+function approxMetersPerDegLat() {
+  return 110540;
+}
+function distMeters(a: LatLng, b: LatLng) {
+  const lat0 = (a[0] + b[0]) / 2;
+  const mx = approxMetersPerDegLng(lat0);
+  const my = approxMetersPerDegLat();
+  const ax = a[1] * mx,
+    ay = a[0] * my;
+  const bx = b[1] * mx,
+    by = b[0] * my;
+  return Math.hypot(bx - ax, by - ay);
 }
 
-function haversineMeters(a: [number, number], b: [number, number]) {
-  const R = 6371000;
-  const toRad = (x: number) => (x * Math.PI) / 180;
-  const dLat = toRad(b[0] - a[0]);
-  const dLng = toRad(b[1] - a[1]);
-  const lat1 = toRad(a[0]);
-  const lat2 = toRad(b[0]);
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(h));
+// ---------- route projection + direction ----------
+function nearestIndexOnPolyline(coords: LatLng[], p: LatLng) {
+  let bestI = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < coords.length; i++) {
+    const d = distMeters(coords[i], p);
+    if (d < bestD) {
+      bestD = d;
+      bestI = i;
+    }
+  }
+  return bestI;
 }
 
-function dedupeConsecutive(coords: [number, number][]) {
-  if (coords.length <= 1) return coords;
-  const out: [number, number][] = [coords[0]];
+function cumulativeDistances(coords: LatLng[]) {
+  const out: number[] = [0];
   for (let i = 1; i < coords.length; i++) {
-    const last = out[out.length - 1];
-    const cur = coords[i];
-    if (last[0] !== cur[0] || last[1] !== cur[1]) out.push(cur);
+    out.push(out[i - 1] + distMeters(coords[i - 1], coords[i]));
   }
   return out;
 }
 
+// forward distance along polyline, with wrap
+function forwardArcMeters(cum: number[], iFrom: number, iTo: number) {
+  const total = cum[cum.length - 1];
+  if (iTo >= iFrom) return cum[iTo] - cum[iFrom];
+  return total - cum[iFrom] + cum[iTo];
+}
+
+// Trim a polyline so it ends at the target stop, but avoid accidental early cuts on loop routes.
+function trimPolylineToStop(poly: LatLng[] | undefined, stopPos: LatLng | undefined) {
+  if (!poly || poly.length < 2 || !stopPos) return poly ?? null;
+
+  // If it already ends close to the stop, keep it (server slice is usually correct).
+  const END_OK_M = 90;
+  const endDist = distMeters(poly[poly.length - 1], stopPos);
+  if (endDist <= END_OK_M) return poly;
+
+  // Prefer a match near the end: scan backwards for first point within radius.
+  const HIT_M = 120;
+  for (let i = poly.length - 1; i >= 0; i--) {
+    if (distMeters(poly[i], stopPos) <= HIT_M) {
+      const trimmed = poly.slice(0, i + 1);
+      trimmed[trimmed.length - 1] = stopPos; // snap visually to marker
+      return trimmed.length >= 2 ? trimmed : poly;
+    }
+  }
+
+  // Fallback: closest point but end-biased (last 60%).
+  const start = Math.floor(poly.length * 0.4);
+  let bestI = start;
+  let bestD = Infinity;
+  for (let i = start; i < poly.length; i++) {
+    const d = distMeters(poly[i], stopPos);
+    if (d < bestD) {
+      bestD = d;
+      bestI = i;
+    }
+  }
+
+  const trimmed = poly.slice(0, bestI + 1);
+  if (trimmed.length >= 2) trimmed[trimmed.length - 1] = stopPos;
+  return trimmed.length >= 2 ? trimmed : poly;
+}
+
+// ---------- icons ----------
 function createBusIcon(line: string, isDark: boolean) {
   const bg = isDark ? "#15803d" : "#2563eb";
   const border = isDark ? "#052e16" : "#ffffff";
@@ -149,13 +142,9 @@ function createBusIcon(line: string, isDark: boolean) {
       color:${text};
       border:2px solid ${border};
       border-radius:50%;
-      width:36px;
-      height:36px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      font-weight:800;
-      font-size:12px;
+      width:36px;height:36px;
+      display:flex;align-items:center;justify-content:center;
+      font-weight:800;font-size:12px;
       box-shadow:0 4px 8px rgba(0,0,0,0.35);
     ">${line || "?"}</div>`,
     iconSize: [36, 36],
@@ -163,22 +152,69 @@ function createBusIcon(line: string, isDark: boolean) {
   });
 }
 
-function createBusStopIcon(isDark: boolean) {
-  const fill = isDark ? "#fbbf24" : "#fde047";
-  const stroke = isDark ? "#0f172a" : "#1f2937";
+function createNearestBusIcon(line: string, isDark: boolean) {
+  const bg = isDark ? "#db2777" : "#e11d48";
+  const border = isDark ? "#111827" : "#ffffff";
+  const pulse = isDark ? "rgba(236,72,153,0.35)" : "rgba(225,29,72,0.30)";
+
+  return L.divIcon({
+    className: "bus-icon-nearest",
+    html: `
+      <div style="position:relative;width:46px;height:46px;">
+        <style>
+          @keyframes busPulse { 0% { transform: scale(0.65); opacity: .65; } 100% { transform: scale(1.35); opacity: 0; } }
+        </style>
+        <div style="position:absolute;inset:-10px;border-radius:9999px;background:${pulse};animation: busPulse 1.35s ease-out infinite;"></div>
+        <div style="position:absolute;inset:0;background:${bg};color:#fff;border:3px solid ${border};border-radius:9999px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;box-shadow:0 8px 16px rgba(0,0,0,0.45);">${line || "?"}</div>
+      </div>
+    `,
+    iconSize: [46, 46],
+    iconAnchor: [23, 23],
+  });
+}
+
+type StopKind = "normal" | "board" | "transfer" | "dest";
+
+function createBusStopIcon(isDark: boolean, kind: StopKind = "normal") {
+  const cfg: Record<StopKind, { fill: string; stroke: string; size: number; ring: string }> = {
+    normal: {
+      fill: isDark ? "#fbbf24" : "#fde047",
+      stroke: isDark ? "#0f172a" : "#1f2937",
+      size: 12,
+      ring: "transparent",
+    },
+    board: {
+      fill: isDark ? "#22c55e" : "#16a34a",
+      stroke: isDark ? "#0f172a" : "#052e16",
+      size: 16,
+      ring: isDark ? "rgba(34,197,94,0.25)" : "rgba(22,163,74,0.22)",
+    },
+    transfer: {
+      fill: isDark ? "#a855f7" : "#7c3aed",
+      stroke: isDark ? "#0f172a" : "#2e1065",
+      size: 16,
+      ring: isDark ? "rgba(168,85,247,0.25)" : "rgba(124,58,237,0.22)",
+    },
+    dest: {
+      fill: isDark ? "#ef4444" : "#dc2626",
+      stroke: isDark ? "#0f172a" : "#7f1d1d",
+      size: 18,
+      ring: isDark ? "rgba(239,68,68,0.25)" : "rgba(220,38,38,0.22)",
+    },
+  };
+
+  const { fill, stroke, size, ring } = cfg[kind];
 
   return L.divIcon({
     className: "bus-stop-icon",
-    html: `<div style="
-      background-color:${fill};
-      border:2px solid ${stroke};
-      border-radius:9999px;
-      width:12px;
-      height:12px;
-      box-shadow:0 2px 6px rgba(0,0,0,0.35);
-    "></div>`,
-    iconSize: [12, 12],
-    iconAnchor: [6, 6],
+    html: `
+      <div style="position:relative;width:${size}px;height:${size}px;">
+        <div style="position:absolute;inset:-10px;border-radius:9999px;background:${ring};"></div>
+        <div style="position:absolute;inset:0;background-color:${fill};border:2px solid ${stroke};border-radius:9999px;box-shadow:0 2px 8px rgba(0,0,0,0.35);"></div>
+      </div>
+    `,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
   });
 }
 
@@ -189,13 +225,7 @@ function createUserIcon(isDark: boolean) {
 
   return L.divIcon({
     className: "user-icon",
-    html: `<div style="
-      width:16px;height:16px;border-radius:9999px;
-      background:${bg};
-      border:3px solid ${ring};
-      box-shadow:0 4px 10px rgba(0,0,0,0.35);
-      display:flex;align-items:center;justify-content:center;
-    ">
+    html: `<div style="width:16px;height:16px;border-radius:9999px;background:${bg};border:3px solid ${ring};box-shadow:0 4px 10px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;">
       <div style="width:6px;height:6px;border-radius:9999px;background:${dot};"></div>
     </div>`,
     iconSize: [16, 16],
@@ -203,40 +233,45 @@ function createUserIcon(isDark: boolean) {
   });
 }
 
+function isSpecificLine(x: LineMode) {
+  return x !== "BUSES_ONLY" && x !== "ALL_ROUTES";
+}
+
 export default function BusMap() {
   const [buses, setBuses] = useState<Bus[]>([]);
   const [routes, setRoutes] = useState<Record<string, BusRoute>>({});
-  const [snappedRoutes, setSnappedRoutes] = useState<Record<string, [number, number][]>>({});
-  const [selectedLine, setSelectedLine] = useState<string>("ALL");
+
+  // ✅ Default: show only buses, no routes
+  const [selectedLine, setSelectedLine] = useState<LineMode>("BUSES_ONLY");
+
   const [isDarkMap, setIsDarkMap] = useState(false);
-  const [userPos, setUserPos] = useState<[number, number] | null>(null);
+
+  // --- nearest bus to me (filter-aware) ---
+  const [trackingNearest, setTrackingNearest] = useState(false);
+  const watchIdRef = useRef<number | null>(null);
+  const [userPos, setUserPos] = useState<LatLng | null>(null);
   const [nearestBusId, setNearestBusId] = useState<string | null>(null);
   const [nearestDistanceM, setNearestDistanceM] = useState<number | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
 
-  // ✅ NEW: toggle for nearest feature
-  const [nearestEnabled, setNearestEnabled] = useState<boolean>(true);
+  // --- planner ---
+  const [destStopId, setDestStopId] = useState<string>("");
+  const [plan, setPlan] = useState<PlanResponse | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
 
-  // Persist theme
+  // Closest bus (direction-aware) during planning
+  const [closestPlannedBusId, setClosestPlannedBusId] = useState<string | null>(null);
+  const busPrevRef = useRef<Map<string, { idx: number; ts: number }>>(new Map());
+
   useEffect(() => {
     const saved = localStorage.getItem("mapTheme");
     if (saved === "dark") setIsDarkMap(true);
     if (saved === "light") setIsDarkMap(false);
   }, []);
-
   useEffect(() => {
     localStorage.setItem("mapTheme", isDarkMap ? "dark" : "light");
   }, [isDarkMap]);
-
-  // ✅ NEW: when turning OFF, clear nearest state + user marker + errors
-  useEffect(() => {
-    if (!nearestEnabled) {
-      setNearestBusId(null);
-      setNearestDistanceM(null);
-      setUserPos(null);
-      setGeoError(null);
-    }
-  }, [nearestEnabled]);
 
   const tileConfig = isDarkMap
     ? {
@@ -246,19 +281,16 @@ export default function BusMap() {
       }
     : {
         url: "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       };
 
-  const routeColor = isDarkMap ? "#15803d" : "#2563eb";
-
-  const fetchBuses = async () => {
+  const fetchBuses = useCallback(async () => {
     const response = await fetch("/api/buses", { cache: "no-store" });
     if (!response.ok) return;
 
     const data = await response.json();
-
     const updatedBuses: Bus[] = [];
+
     Object.entries(data as Record<string, any>).forEach(([busId, busData]) => {
       const bus = busData as any;
       if (bus?.["1"] !== "on") return;
@@ -281,50 +313,25 @@ export default function BusMap() {
     });
 
     setBuses(updatedBuses);
-  };
+  }, []);
 
-  const fetchRoutesAndSnap = async () => {
+  const fetchRoutes = useCallback(async () => {
     const res = await fetch("/api/routes", { cache: "no-store" });
     if (!res.ok) return;
-
     const data: Record<string, BusRoute> = await res.json();
     setRoutes(data);
-
-    const entries = Object.entries(data);
-    const snappedUpdates: Record<string, [number, number][]> = {};
-
-    for (const [line, route] of entries) {
-      if (!route?.coord || route.coord.length < 2) continue;
-      if (line === "NO_LINE" || line.startsWith("NO_")) continue;
-
-      const lastN = dedupeConsecutive(route.coord.slice(-90));
-
-      const snapRes = await fetch("/api/osrm-match", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ coords: lastN }),
-      });
-
-      let snapJson: any = null;
-      try {
-        snapJson = await snapRes.json();
-      } catch {}
-
-      if (snapRes.ok && Array.isArray(snapJson?.coords) && snapJson.coords.length >= 2) {
-        snappedUpdates[line] = snapJson.coords;
-      }
-    }
-
-    setSnappedRoutes((prev) => ({ ...prev, ...snappedUpdates }));
-  };
+  }, []);
 
   useEffect(() => {
-    fetchRoutesAndSnap();
+    fetchRoutes();
     fetchBuses();
-
     const interval = setInterval(fetchBuses, 2500);
-    return () => clearInterval(interval);
-  }, []);
+    const routesInterval = setInterval(fetchRoutes, 20000);
+    return () => {
+      clearInterval(interval);
+      clearInterval(routesInterval);
+    };
+  }, [fetchRoutes, fetchBuses]);
 
   const availableLines = useMemo(() => {
     const fromRoutes = Object.keys(routes);
@@ -334,104 +341,379 @@ export default function BusMap() {
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [routes, buses]);
 
-  const filteredBuses = useMemo(() => {
-    if (selectedLine === "ALL") return buses;
-    return buses.filter((b) => b.line === selectedLine);
-  }, [buses, selectedLine]);
+  const showOnlyPlannedRoute = useMemo(() => Boolean(plan && plan.ok), [plan]);
 
+  // Precompute cumulative distances for each route polyline (for "distance along route")
+  const routeCumByLine = useMemo(() => {
+    const out: Record<string, number[]> = {};
+    for (const [line, r] of Object.entries(routes)) {
+      if (r?.coord && r.coord.length >= 2) out[line] = cumulativeDistances(r.coord as LatLng[]);
+    }
+    return out;
+  }, [routes]);
+
+  // --- buses to render ---
+  const busesToRender = useMemo(() => {
+    if (plan && plan.ok) {
+      const bus = buses.find((b) => b.id === closestPlannedBusId);
+      return bus ? [bus] : [];
+    }
+
+    if (isSpecificLine(selectedLine)) return buses.filter((b) => b.line === selectedLine);
+    return buses; // BUSES_ONLY or ALL_ROUTES => show all buses
+  }, [plan, buses, closestPlannedBusId, selectedLine]);
+
+  // --- base route polylines (only if not planning) ---
   const routePolylines = useMemo(() => {
-    const makePolyline = (key: string, coords: [number, number][], weight: number) => {
-      if (!coords || coords.length < 2) return null;
-      return (
-        <Polyline
-          key={key}
-          positions={toLatLngTupleArray(coords)}
-          pathOptions={{ color: routeColor, weight }}
-        />
-      );
-    };
+    if (showOnlyPlannedRoute) return null;
 
-    if (selectedLine === "ALL") {
+    const style = { color: isDarkMap ? "#15803d" : "#2563eb", weight: isDarkMap ? 5 : 4, opacity: 1 };
+
+    if (selectedLine === "ALL_ROUTES") {
       return Object.entries(routes).map(([line, route]) => {
-        if (line === "NO_LINE" || line.startsWith("NO_")) return null;
-        const coords = snappedRoutes[line] ?? route.coord;
-        return makePolyline(line, coords, isDarkMap ? 5 : 4);
+        if (!route?.coord || route.coord.length < 2) return null;
+        return (
+          <Polyline
+            key={`all-${line}`}
+            positions={toLatLngTupleArray(route.coord as LatLng[])}
+            pathOptions={style}
+          />
+        );
       });
     }
 
-    const route = routes[selectedLine];
-    if (!route?.coord || route.coord.length < 2) return null;
+    if (isSpecificLine(selectedLine)) {
+      const route = routes[selectedLine];
+      if (!route?.coord || route.coord.length < 2) return null;
+      return (
+        <Polyline
+          key={`one-${selectedLine}`}
+          positions={toLatLngTupleArray(route.coord as LatLng[])}
+          pathOptions={{ ...style, weight: 5 }}
+        />
+      );
+    }
 
-    const coords = snappedRoutes[selectedLine] ?? route.coord;
-    return makePolyline(selectedLine, coords, 5);
-  }, [routes, snappedRoutes, selectedLine, routeColor, isDarkMap]);
+    // BUSES_ONLY => no routes
+    return null;
+  }, [routes, selectedLine, isDarkMap, showOnlyPlannedRoute]);
 
-  const busStopMarkers = useMemo(() => {
-    const icon = createBusStopIcon(isDarkMap);
-    return SUCEAVA_BUS_STOPS.map((stop) => (
-      <Marker key={stop.id} position={stop.position} icon={icon}>
-        <Popup>
-          <div>
-            <strong>{stop.name}</strong>
-            <br />
-            <strong>Lat:</strong> {stop.position[0].toFixed(6)}
-            <br />
-            <strong>Lng:</strong> {stop.position[1].toFixed(6)}
-          </div>
-        </Popup>
-      </Marker>
-    ));
-  }, [isDarkMap]);
+  // --- planner polylines ---
+  const planPolylines = useMemo(() => {
+    if (!plan || !plan.ok) return null;
 
-  const findClosestBus = () => {
-    // ✅ NEW: if feature is off, ignore
-    if (!nearestEnabled) return;
+    const walkStyle = {
+      color: isDarkMap ? "#eab308" : "#ca8a04",
+      weight: 4,
+      opacity: 1,
+      dashArray: "8 8",
+    } as const;
 
+    const rideAStyle = {
+      color: isDarkMap ? "#22c55e" : "#16a34a",
+      weight: 6,
+      opacity: 1,
+    } as const;
+
+    const rideBStyle = {
+      color: isDarkMap ? "#a855f7" : "#7c3aed",
+      weight: 6,
+      opacity: 1,
+    } as const;
+
+    const out: any[] = [];
+
+    if (plan.walk?.length >= 2) {
+      out.push(<Polyline key="plan-walk" positions={toLatLngTupleArray(plan.walk)} pathOptions={walkStyle} />);
+    }
+
+    const getStopPos = (id?: string) =>
+      id ? (SUCEAVA_BUS_STOPS.find((s) => s.id === id)?.position as LatLng | undefined) : undefined;
+
+    const rideAEndPos = plan.kind === "transfer" ? getStopPos(plan.transferStopId) : getStopPos(plan.destStopId);
+    const rideATrimmed = trimPolylineToStop(plan.rideA, rideAEndPos);
+
+    if (rideATrimmed && rideATrimmed.length >= 2) {
+      out.push(<Polyline key="plan-rideA" positions={toLatLngTupleArray(rideATrimmed)} pathOptions={rideAStyle} />);
+    }
+
+    if (plan.kind === "transfer" && plan.rideB) {
+      const rideBEndPos = getStopPos(plan.destStopId);
+      const rideBTrimmed = trimPolylineToStop(plan.rideB, rideBEndPos);
+      if (rideBTrimmed && rideBTrimmed.length >= 2) {
+        out.push(<Polyline key="plan-rideB" positions={toLatLngTupleArray(rideBTrimmed)} pathOptions={rideBStyle} />);
+      }
+    }
+
+    return out;
+  }, [plan, isDarkMap]);
+
+  // ---------- nearest bus to me (filter-aware) ----------
+  const computeNearest = useCallback(
+    (me: LatLng) => {
+      const candidates = isSpecificLine(selectedLine) ? buses.filter((b) => b.line === selectedLine) : buses;
+
+      if (!candidates.length) {
+        setNearestBusId(null);
+        setNearestDistanceM(null);
+        setGeoError("No buses available to compare right now.");
+        return;
+      }
+
+      let bestBus: Bus | null = null;
+      let bestDist = Infinity;
+
+      for (const b of candidates) {
+        const d = distMeters(me, [b.latitude, b.longitude]);
+        if (d < bestDist) {
+          bestDist = d;
+          bestBus = b;
+        }
+      }
+
+      if (!bestBus || !Number.isFinite(bestDist)) {
+        setGeoError("Could not compute nearest bus.");
+        setNearestBusId(null);
+        setNearestDistanceM(null);
+        return;
+      }
+
+      setGeoError(null);
+      setNearestBusId(bestBus.id);
+      setNearestDistanceM(bestDist);
+    },
+    [buses, selectedLine]
+  );
+
+  const stopTrackingNearest = useCallback(() => {
+    if (watchIdRef.current != null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    setTrackingNearest(false);
+    setNearestBusId(null);
+    setNearestDistanceM(null);
+    setUserPos(null);
     setGeoError(null);
+  }, []);
 
+  const startTrackingNearest = useCallback(() => {
+    setGeoError(null);
     if (!navigator.geolocation) {
       setGeoError("Geolocation is not supported by your browser.");
       return;
     }
+    if (watchIdRef.current != null) return;
 
-    navigator.geolocation.getCurrentPosition(
+    setTrackingNearest(true);
+    watchIdRef.current = navigator.geolocation.watchPosition(
       (pos) => {
-        const me: [number, number] = [pos.coords.latitude, pos.coords.longitude];
+        const me: LatLng = [pos.coords.latitude, pos.coords.longitude];
         setUserPos(me);
-
-        const candidates =
-          selectedLine === "ALL" ? buses : buses.filter((b) => b.line === selectedLine);
-
-        if (!candidates.length) {
-          setGeoError("No buses available to compare right now.");
-          return;
-        }
-
-        let bestBus: Bus | null = null;
-        let bestDist = Infinity;
-
-        for (const b of candidates) {
-          const d = haversineMeters(me, [b.latitude, b.longitude]);
-          if (d < bestDist) {
-            bestDist = d;
-            bestBus = b;
-          }
-        }
-
-        if (!bestBus || !Number.isFinite(bestDist)) {
-          setGeoError("Could not compute nearest bus.");
-          return;
-        }
-
-        setNearestBusId(bestBus.id);
-        setNearestDistanceM(bestDist);
+        computeNearest(me);
       },
       (err) => {
         setGeoError(err.message || "Failed to get location.");
+        stopTrackingNearest();
       },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 5000 }
+      { enableHighAccuracy: true, maximumAge: 1500, timeout: 12000 }
     );
-  };
+  }, [computeNearest, stopTrackingNearest]);
+
+  useEffect(() => {
+    if (!trackingNearest || !userPos) return;
+    computeNearest(userPos);
+  }, [trackingNearest, userPos, buses, selectedLine, computeNearest]);
+
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
+    };
+  }, []);
+
+  // ---------- planner ----------
+  const getMeOnce = useCallback(async (): Promise<LatLng> => {
+    if (userPos) return userPos;
+    return await new Promise<LatLng>((resolve, reject) => {
+      if (!navigator.geolocation) return reject(new Error("Geolocation is not supported by your browser."));
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve([pos.coords.latitude, pos.coords.longitude]),
+        (err) => reject(new Error(err.message || "Failed to get location.")),
+        { enableHighAccuracy: true, maximumAge: 1500, timeout: 12000 }
+      );
+    });
+  }, [userPos]);
+
+  const runPlan = useCallback(
+    async (nextDestStopId: string) => {
+      setPlanError(null);
+      setPlanLoading(true);
+
+      try {
+        const me = await getMeOnce();
+        setUserPos(me);
+
+        const res = await fetch("/api/plan", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ me, destStopId: nextDestStopId }),
+        });
+
+        const raw = await res.text();
+        const ct = res.headers.get("content-type") || "";
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${raw.slice(0, 300)}`);
+        if (!ct.includes("application/json")) throw new Error(`Non-JSON response (${ct}): ${raw.slice(0, 300)}`);
+
+        const data = JSON.parse(raw) as PlanResponse;
+        setPlan(data);
+        if (!data.ok) setPlanError(data.error);
+      } catch (e: any) {
+        const msg = e?.message || "Failed to plan route.";
+        setPlan({ ok: false, error: msg });
+        setPlanError(msg);
+      } finally {
+        setPlanLoading(false);
+      }
+    },
+    [getMeOnce]
+  );
+
+  const clearPlan = useCallback(() => {
+    setPlan(null);
+    setPlanError(null);
+    setPlanLoading(false);
+    setDestStopId("");
+    setClosestPlannedBusId(null);
+    busPrevRef.current.clear();
+  }, []);
+
+  useEffect(() => {
+    if (!destStopId) return;
+    runPlan(destStopId);
+  }, [destStopId, runPlan]);
+
+  // ---------- direction-aware bus selection for planning ----------
+  useEffect(() => {
+    if (!plan || !plan.ok) {
+      setClosestPlannedBusId(null);
+      busPrevRef.current.clear();
+      return;
+    }
+
+    const boardStop = SUCEAVA_BUS_STOPS.find((s) => s.id === plan.boardStopId);
+    if (!boardStop) {
+      setClosestPlannedBusId(null);
+      return;
+    }
+
+    const lineRoute = routes[plan.lineA]?.coord as LatLng[] | undefined;
+    const cum = routeCumByLine[plan.lineA];
+    if (!lineRoute || lineRoute.length < 2 || !cum) {
+      setClosestPlannedBusId(null);
+      return;
+    }
+
+    const stopIdx = nearestIndexOnPolyline(lineRoute, boardStop.position);
+    const candidates = buses.filter((b) => b.line === plan.lineA);
+    if (!candidates.length) {
+      setClosestPlannedBusId(null);
+      return;
+    }
+
+    const now = Date.now();
+
+    let bestId: string | null = null;
+    let bestMeters = Infinity;
+
+    for (const b of candidates) {
+      const currIdx = nearestIndexOnPolyline(lineRoute, [b.latitude, b.longitude]);
+      const prev = busPrevRef.current.get(b.id);
+      busPrevRef.current.set(b.id, { idx: currIdx, ts: now });
+
+      // Need at least 2 points in time to infer direction
+      if (!prev) continue;
+
+      const fwdMove = forwardArcMeters(cum, prev.idx, currIdx);
+      const backMove = forwardArcMeters(cum, currIdx, prev.idx);
+      const goingForward = fwdMove <= backMove;
+
+      // ignore buses going away (for this polyline orientation)
+      if (!goingForward) continue;
+
+      const metersToBoard = forwardArcMeters(cum, currIdx, stopIdx);
+      if (metersToBoard < bestMeters) {
+        bestMeters = metersToBoard;
+        bestId = b.id;
+      }
+    }
+
+    // fallback (first tick / no history): closest by air distance to the board stop
+    if (!bestId) {
+      let fallback: string | null = null;
+      let bestD = Infinity;
+      for (const b of candidates) {
+        const d = distMeters([b.latitude, b.longitude], boardStop.position);
+        if (d < bestD) {
+          bestD = d;
+          fallback = b.id;
+        }
+      }
+      setClosestPlannedBusId(fallback);
+      return;
+    }
+
+    setClosestPlannedBusId(bestId);
+  }, [plan, buses, routes, routeCumByLine]);
+
+  // ---------- stop markers ----------
+  const busStopMarkers = useMemo(() => {
+    const boardId = plan && plan.ok ? plan.boardStopId : null;
+    const transferId = plan && plan.ok && plan.kind === "transfer" ? plan.transferStopId ?? null : null;
+    const destId = plan && plan.ok ? plan.destStopId : destStopId || null;
+
+    return SUCEAVA_BUS_STOPS.map((stop) => {
+      const kind: StopKind =
+        destId === stop.id
+          ? "dest"
+          : transferId === stop.id
+          ? "transfer"
+          : boardId === stop.id
+          ? "board"
+          : "normal";
+
+      const icon = createBusStopIcon(isDarkMap, kind);
+
+      return (
+        <Marker key={stop.id} position={stop.position as unknown as LatLngTuple} icon={icon}>
+          <Popup>
+            <div style={{ minWidth: 220 }}>
+              <strong>{stop.name}</strong>
+              <br />
+              <strong>ID:</strong> {stop.id}
+              <br />
+              <strong>Lines:</strong> {stop.lines?.length ? stop.lines.join(", ") : "—"}
+              <hr style={{ margin: "10px 0" }} />
+              <button
+                onClick={() => setDestStopId(stop.id)}
+                style={{
+                  width: "100%",
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  border: "1px solid #e5e7eb",
+                  background: "#f9fafb",
+                  fontSize: 13,
+                  fontWeight: 900,
+                  cursor: "pointer",
+                }}
+              >
+                🧭 Plan to this stop
+              </button>
+            </div>
+          </Popup>
+        </Marker>
+      );
+    });
+  }, [isDarkMap, plan, destStopId]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
@@ -449,24 +731,14 @@ export default function BusMap() {
           display: "flex",
           flexDirection: "column",
           gap: 10,
-          minWidth: 220,
+          minWidth: 280,
         }}
       >
-        <div
-          style={{
-            fontSize: 14,
-            fontWeight: 800,
-            color: "#1f2937",
-            letterSpacing: 0.3,
-            textAlign: "center",
-          }}
-        >
-          Linii
-        </div>
+        <div style={{ fontSize: 14, fontWeight: 800, color: "#1f2937", textAlign: "center" }}>Linii</div>
 
         <select
           value={selectedLine}
-          onChange={(e) => setSelectedLine(e.target.value)}
+          onChange={(e) => setSelectedLine(e.target.value as LineMode)}
           style={{
             padding: "8px 10px",
             borderRadius: 10,
@@ -474,115 +746,128 @@ export default function BusMap() {
             fontSize: 14,
             background: "#ffffff",
             color: "#111827",
-            fontWeight: 600,
+            fontWeight: 700,
             outline: "none",
             cursor: "pointer",
           }}
+          disabled={showOnlyPlannedRoute}
+          title={showOnlyPlannedRoute ? "Disabled while planning (planned route overrides)" : undefined}
         >
-          <option value="ALL">Toate liniile</option>
+          <option value="BUSES_ONLY">Doar busuri</option>
+          <option value="ALL_ROUTES">Toate rutele</option>
           {availableLines.map((line) => (
             <option key={line} value={line}>
-              {line}
+              Linia {line}
             </option>
           ))}
         </select>
 
         <button
-          onClick={() => setIsDarkMap((v) => !v)}
+          onClick={trackingNearest ? stopTrackingNearest : startTrackingNearest}
           style={{
             padding: "8px 10px",
             borderRadius: 10,
             border: "1px solid #e5e7eb",
-            background: isDarkMap ? "#111827" : "#f9fafb",
-            color: isDarkMap ? "#f9fafb" : "#374151",
-            fontSize: 13,
-            fontWeight: 800,
-            cursor: "pointer",
-          }}
-        >
-          {isDarkMap ? "☀️ Mod lumina" : "🌙 Mod intuneric"}
-        </button>
-
-        {/* ✅ NEW: Nearest toggle */}
-        <button
-          onClick={() => setNearestEnabled((v) => !v)}
-          style={{
-            padding: "8px 10px",
-            borderRadius: 10,
-            border: "1px solid #e5e7eb",
-            background: nearestEnabled ? "#ecfeff" : "#fff1f2",
+            background: trackingNearest ? "#fff1f2" : "#ecfeff",
             color: "#111827",
             fontSize: 13,
-            fontWeight: 800,
+            fontWeight: 900,
             cursor: "pointer",
           }}
         >
-          {nearestEnabled ? "✅ Cel mai apropiat autobuz: ON" : "⛔ Cel mai apropiat autobuz: OFF"}
+          {trackingNearest ? "⛔ Opreste busul cel mai apropiat" : "📍 Busul cel mai apropiat de mine"}
         </button>
 
-        {selectedLine !== "ALL" && (
+        {trackingNearest && nearestDistanceM != null && nearestBusId && (
+          <div style={{ fontSize: 12, fontWeight: 900, color: "#374151", textAlign: "center" }}>
+            Aproape: {Math.round(nearestDistanceM)} m
+          </div>
+        )}
+
+        {geoError && <div style={{ fontSize: 12, fontWeight: 900, color: "#b91c1c" }}>{geoError}</div>}
+
+        <div style={{ height: 1, background: "#e5e7eb", margin: "4px 0" }} />
+
+        <div style={{ fontSize: 14, fontWeight: 900, color: "#111827", textAlign: "center" }}>
+          Planner (me → stație)
+        </div>
+
+        <select
+          value={destStopId}
+          onChange={(e) => setDestStopId(e.target.value)}
+          style={{
+            padding: "8px 10px",
+            borderRadius: 10,
+            border: "1px solid #cbd5e1",
+            fontSize: 14,
+            background: "#ffffff",
+            color: "#111827",
+            fontWeight: 700,
+            outline: "none",
+            cursor: "pointer",
+          }}
+        >
+          <option value="">Alege stația destinație…</option>
+          {SUCEAVA_BUS_STOPS.slice()
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} ({s.id})
+              </option>
+            ))}
+        </select>
+
+        <div style={{ display: "flex", gap: 8 }}>
           <button
-            onClick={() => setSelectedLine("ALL")}
+            onClick={clearPlan}
+            disabled={!plan && !destStopId}
             style={{
+              flex: 1,
               padding: "8px 10px",
               borderRadius: 10,
               border: "1px solid #e5e7eb",
               background: "#f9fafb",
               color: "#374151",
               fontSize: 13,
-              fontWeight: 700,
-              cursor: "pointer",
+              fontWeight: 900,
+              cursor: !plan && !destStopId ? "not-allowed" : "pointer",
+              opacity: !plan && !destStopId ? 0.6 : 1,
             }}
           >
-            Sterge
+            ✖ Clear
           </button>
-        )}
 
-        <button
-          onClick={findClosestBus}
-          disabled={!nearestEnabled} // ✅ NEW
-          style={{
-            padding: "8px 10px",
-            borderRadius: 10,
-            border: "1px solid #e5e7eb",
-            background: nearestEnabled ? "#f9fafb" : "#e5e7eb",
-            color: nearestEnabled ? "#374151" : "#6b7280",
-            fontSize: 13,
-            fontWeight: 800,
-            cursor: nearestEnabled ? "pointer" : "not-allowed",
-          }}
-        >
-          📍 Cel mai apropiat autobuz
-        </button>
+          <button
+            onClick={() => setIsDarkMap((v) => !v)}
+            style={{
+              padding: "8px 10px",
+              borderRadius: 10,
+              border: "1px solid #e5e7eb",
+              background: isDarkMap ? "#111827" : "#f9fafb",
+              color: isDarkMap ? "#f9fafb" : "#374151",
+              fontSize: 13,
+              fontWeight: 900,
+              cursor: "pointer",
+              minWidth: 120,
+            }}
+          >
+            {isDarkMap ? "☀️ Lumina" : "🌙 Intuneric"}
+          </button>
+        </div>
 
-        {nearestEnabled && nearestDistanceM != null && nearestBusId && (
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", textAlign: "center" }}>
-            Nearest: {Math.round(nearestDistanceM)} m
-          </div>
-        )}
-
-        {nearestEnabled && geoError && (
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#b91c1c" }}>
-            {geoError}
-          </div>
-        )}
+        {planLoading && <div style={{ fontSize: 12, fontWeight: 900, color: "#374151" }}>⏳ Planning…</div>}
+        {planError && <div style={{ fontSize: 12, fontWeight: 900, color: "#b91c1c" }}>{planError}</div>}
       </div>
 
       <MapContainer center={[47.67109, 26.27769]} zoom={13} scrollWheelZoom preferCanvas>
-        <TileLayer
-          key={isDarkMap ? "dark" : "light"}
-          attribution={tileConfig.attribution}
-          url={tileConfig.url}
-        />
+        <TileLayer key={isDarkMap ? "dark" : "light"} attribution={tileConfig.attribution} url={tileConfig.url} />
 
-        {/* Routes */}
-        {routePolylines}
+        {/* Planned route overrides everything */}
+        {showOnlyPlannedRoute ? planPolylines : routePolylines}
 
-        {/* Bus stops */}
         {busStopMarkers}
 
-        {/* ✅ only show user marker when feature on */}
-        {nearestEnabled && userPos && (
+        {trackingNearest && userPos && (
           <Marker position={userPos} icon={createUserIcon(isDarkMap)}>
             <Popup>
               <strong>Locatia mea</strong>
@@ -590,27 +875,12 @@ export default function BusMap() {
           </Marker>
         )}
 
-        {/* Buses */}
-        {filteredBuses.map((bus) => {
-          const isNearest = nearestEnabled && bus.id === nearestBusId; // ✅ NEW
+        {/* live buses (always); in plan-mode only the chosen bus is shown */}
+        {busesToRender.map((bus) => {
+          const isPlannedClosest = showOnlyPlannedRoute && bus.id === closestPlannedBusId;
+          const isNearestToMe = trackingNearest && bus.id === nearestBusId && !showOnlyPlannedRoute;
 
-          const icon = isNearest
-            ? L.divIcon({
-                className: "bus-icon-nearest",
-                html: `<div style="
-                  background-color:${isDarkMap ? "#166534" : "#1d4ed8"};
-                  color:#ffffff;
-                  border:3px solid ${isDarkMap ? "#052e16" : "#ffffff"};
-                  border-radius:50%;
-                  width:46px;height:46px;
-                  display:flex;align-items:center;justify-content:center;
-                  font-weight:900;font-size:13px;
-                  box-shadow:0 8px 16px rgba(0,0,0,0.45);
-                ">${bus.line || "?"}</div>`,
-                iconSize: [46, 46],
-                iconAnchor: [23, 23],
-              })
-            : createBusIcon(bus.line, isDarkMap);
+          const icon = isPlannedClosest || isNearestToMe ? createNearestBusIcon(bus.line, isDarkMap) : createBusIcon(bus.line, isDarkMap);
 
           return (
             <Marker key={bus.id} position={[bus.latitude, bus.longitude]} icon={icon}>
@@ -619,7 +889,7 @@ export default function BusMap() {
                   <strong>Line:</strong> {bus.line || "?"} <br />
                   <strong>Lat:</strong> {bus.latitude.toFixed(6)} <br />
                   <strong>Lng:</strong> {bus.longitude.toFixed(6)} <br />
-                  {isNearest && nearestDistanceM != null && (
+                  {isNearestToMe && nearestDistanceM != null && (
                     <>
                       <strong>Distance:</strong> {Math.round(nearestDistanceM)} m
                       <br />
