@@ -35,6 +35,8 @@ type PlanResponse =
       boardStopId: string;
       transferStopId?: string;
       destStopId: string;
+      closestBusId: string | null;
+      walkM: number;
       walk: LatLng[];
       rideA: LatLng[];
       rideB?: LatLng[];
@@ -260,9 +262,11 @@ export default function BusMap() {
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
 
-  // Closest bus (direction-aware) during planning
+  // Closest bus during planning
   const [closestPlannedBusId, setClosestPlannedBusId] = useState<string | null>(null);
   const busPrevRef = useRef<Map<string, { idx: number; ts: number }>>(new Map());
+  const busesRef = useRef<Bus[]>([]);
+  useEffect(() => { busesRef.current = buses; }, [buses]);
 
   useEffect(() => {
     const saved = localStorage.getItem("mapTheme");
@@ -342,6 +346,15 @@ export default function BusMap() {
   }, [routes, buses]);
 
   const showOnlyPlannedRoute = useMemo(() => Boolean(plan && plan.ok), [plan]);
+
+  // Distance from the highlighted bus to the board stop (updates with every bus refresh)
+  const busDistToBoard = useMemo(() => {
+    if (!plan || !plan.ok || !closestPlannedBusId) return null;
+    const bus = buses.find((b) => b.id === closestPlannedBusId);
+    const boardStop = SUCEAVA_BUS_STOPS.find((s) => s.id === plan.boardStopId);
+    if (!bus || !boardStop) return null;
+    return distMeters([bus.latitude, bus.longitude], boardStop.position as LatLng);
+  }, [plan, closestPlannedBusId, buses]);
 
   // Precompute cumulative distances for each route polyline (for "distance along route")
   const routeCumByLine = useMemo(() => {
@@ -553,10 +566,16 @@ export default function BusMap() {
         const me = await getMeOnce();
         setUserPos(me);
 
+        const busList = busesRef.current.map((b) => ({
+          id: b.id,
+          line: b.line,
+          latitude: b.latitude,
+          longitude: b.longitude,
+        }));
         const res = await fetch("/api/plan", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ me, destStopId: nextDestStopId }),
+          body: JSON.stringify({ me, destStopId: nextDestStopId, buses: busList }),
         });
 
         const raw = await res.text();
@@ -647,18 +666,20 @@ export default function BusMap() {
       }
     }
 
-    // fallback (first tick / no history): closest by air distance to the board stop
+    // fallback (first tick / no history): prefer the bus the API already scored, else nearest
     if (!bestId) {
-      let fallback: string | null = null;
-      let bestD = Infinity;
-      for (const b of candidates) {
-        const d = distMeters([b.latitude, b.longitude], boardStop.position);
-        if (d < bestD) {
-          bestD = d;
-          fallback = b.id;
+      const apiPick = plan.closestBusId && candidates.find((b) => b.id === plan.closestBusId);
+      if (apiPick) {
+        setClosestPlannedBusId(plan.closestBusId);
+      } else {
+        let fallback: string | null = null;
+        let bestD = Infinity;
+        for (const b of candidates) {
+          const d = distMeters([b.latitude, b.longitude], boardStop.position);
+          if (d < bestD) { bestD = d; fallback = b.id; }
         }
+        setClosestPlannedBusId(fallback);
       }
-      setClosestPlannedBusId(fallback);
       return;
     }
 
@@ -855,8 +876,116 @@ export default function BusMap() {
           </button>
         </div>
 
-        {planLoading && <div style={{ fontSize: 12, fontWeight: 900, color: "#374151" }}>⏳ Planning…</div>}
-        {planError && <div style={{ fontSize: 12, fontWeight: 900, color: "#b91c1c" }}>{planError}</div>}
+        {planLoading && (
+          <div style={{ fontSize: 12, fontWeight: 900, color: "#374151" }}>⏳ Se calculează…</div>
+        )}
+        {planError && (
+          <div style={{ fontSize: 12, fontWeight: 900, color: "#b91c1c" }}>{planError}</div>
+        )}
+
+        {plan && plan.ok && (() => {
+          const boardStop = SUCEAVA_BUS_STOPS.find((s) => s.id === plan.boardStopId);
+          const transferStop = plan.kind === "transfer"
+            ? SUCEAVA_BUS_STOPS.find((s) => s.id === plan.transferStopId)
+            : null;
+          const destStop = SUCEAVA_BUS_STOPS.find((s) => s.id === plan.destStopId);
+          return (
+            <div style={{
+              background: isDarkMap ? "#1f2937" : "#f0fdf4",
+              border: `1px solid ${isDarkMap ? "#374151" : "#bbf7d0"}`,
+              borderRadius: 10,
+              padding: "10px 12px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 5,
+              fontSize: 12,
+            }}>
+              <div style={{ fontWeight: 900, color: isDarkMap ? "#4ade80" : "#15803d", fontSize: 13 }}>
+                Ruta găsită
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span>🚶</span>
+                <span style={{ color: isDarkMap ? "#d1d5db" : "#374151" }}>
+                  Mergi <strong>~{plan.walkM} m</strong> până la{" "}
+                  <strong>{boardStop?.name ?? plan.boardStopId}</strong>
+                </span>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span
+                  style={{
+                    background: isDarkMap ? "#15803d" : "#2563eb",
+                    color: "#fff",
+                    borderRadius: 6,
+                    padding: "1px 7px",
+                    fontWeight: 900,
+                    fontSize: 12,
+                  }}
+                >
+                  {plan.lineA}
+                </span>
+                <span style={{ color: isDarkMap ? "#d1d5db" : "#374151" }}>
+                  {plan.kind === "direct"
+                    ? <>până la <strong>{destStop?.name ?? plan.destStopId}</strong></>
+                    : <>până la <strong>{transferStop?.name ?? plan.transferStopId}</strong></>}
+                </span>
+              </div>
+
+              {plan.kind === "transfer" && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>🔄</span>
+                    <span style={{ color: isDarkMap ? "#d1d5db" : "#374151" }}>
+                      Schimbă pe linia{" "}
+                      <span
+                        style={{
+                          background: isDarkMap ? "#7c3aed" : "#7c3aed",
+                          color: "#fff",
+                          borderRadius: 6,
+                          padding: "1px 7px",
+                          fontWeight: 900,
+                          fontSize: 12,
+                        }}
+                      >
+                        {plan.lineB}
+                      </span>
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>🏁</span>
+                    <span style={{ color: isDarkMap ? "#d1d5db" : "#374151" }}>
+                      <strong>{destStop?.name ?? plan.destStopId}</strong>
+                    </span>
+                  </div>
+                </>
+              )}
+
+              {busDistToBoard != null && (
+                <div style={{
+                  marginTop: 2,
+                  paddingTop: 6,
+                  borderTop: `1px solid ${isDarkMap ? "#374151" : "#d1fae5"}`,
+                  color: isDarkMap ? "#f87171" : "#be123c",
+                  fontWeight: 900,
+                }}>
+                  🚌 Bus la ~{Math.round(busDistToBoard)} m de stație
+                </div>
+              )}
+              {busDistToBoard == null && closestPlannedBusId == null && (
+                <div style={{
+                  marginTop: 2,
+                  paddingTop: 6,
+                  borderTop: `1px solid ${isDarkMap ? "#374151" : "#d1fae5"}`,
+                  color: isDarkMap ? "#9ca3af" : "#6b7280",
+                  fontWeight: 700,
+                }}>
+                  Niciun bus activ pe linia {plan.lineA}
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       <MapContainer center={[47.67109, 26.27769]} zoom={13} scrollWheelZoom preferCanvas>
