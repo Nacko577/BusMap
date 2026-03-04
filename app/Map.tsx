@@ -66,35 +66,6 @@ function distMeters(a: LatLng, b: LatLng) {
   return Math.hypot(bx - ax, by - ay);
 }
 
-// ---------- route projection + direction ----------
-function nearestIndexOnPolyline(coords: LatLng[], p: LatLng) {
-  let bestI = 0;
-  let bestD = Infinity;
-  for (let i = 0; i < coords.length; i++) {
-    const d = distMeters(coords[i], p);
-    if (d < bestD) {
-      bestD = d;
-      bestI = i;
-    }
-  }
-  return bestI;
-}
-
-function cumulativeDistances(coords: LatLng[]) {
-  const out: number[] = [0];
-  for (let i = 1; i < coords.length; i++) {
-    out.push(out[i - 1] + distMeters(coords[i - 1], coords[i]));
-  }
-  return out;
-}
-
-// forward distance along polyline, with wrap
-function forwardArcMeters(cum: number[], iFrom: number, iTo: number) {
-  const total = cum[cum.length - 1];
-  if (iTo >= iFrom) return cum[iTo] - cum[iFrom];
-  return total - cum[iFrom] + cum[iTo];
-}
-
 // Trim a polyline so it ends at the target stop, but avoid accidental early cuts on loop routes.
 function trimPolylineToStop(poly: LatLng[] | undefined, stopPos: LatLng | undefined) {
   if (!poly || poly.length < 2 || !stopPos) return poly ?? null;
@@ -264,7 +235,7 @@ export default function BusMap() {
 
   // Closest bus during planning
   const [closestPlannedBusId, setClosestPlannedBusId] = useState<string | null>(null);
-  const busPrevRef = useRef<Map<string, { idx: number; ts: number }>>(new Map());
+  const busPrevRef = useRef<Map<string, { pos: LatLng; ts: number }>>(new Map());
   const busesRef = useRef<Bus[]>([]);
   useEffect(() => { busesRef.current = buses; }, [buses]);
 
@@ -355,15 +326,6 @@ export default function BusMap() {
     if (!bus || !boardStop) return null;
     return distMeters([bus.latitude, bus.longitude], boardStop.position as LatLng);
   }, [plan, closestPlannedBusId, buses]);
-
-  // Precompute cumulative distances for each route polyline (for "distance along route")
-  const routeCumByLine = useMemo(() => {
-    const out: Record<string, number[]> = {};
-    for (const [line, r] of Object.entries(routes)) {
-      if (r?.coord && r.coord.length >= 2) out[line] = cumulativeDistances(r.coord as LatLng[]);
-    }
-    return out;
-  }, [routes]);
 
   // --- buses to render ---
   const busesToRender = useMemo(() => {
@@ -625,14 +587,7 @@ export default function BusMap() {
       return;
     }
 
-    const lineRoute = routes[plan.lineA]?.coord as LatLng[] | undefined;
-    const cum = routeCumByLine[plan.lineA];
-    if (!lineRoute || lineRoute.length < 2 || !cum) {
-      setClosestPlannedBusId(null);
-      return;
-    }
-
-    const stopIdx = nearestIndexOnPolyline(lineRoute, boardStop.position);
+    const boardPos = boardStop.position as LatLng;
     const candidates = buses.filter((b) => b.line === plan.lineA);
     if (!candidates.length) {
       setClosestPlannedBusId(null);
@@ -642,31 +597,28 @@ export default function BusMap() {
     const now = Date.now();
 
     let bestId: string | null = null;
-    let bestMeters = Infinity;
+    let bestDist = Infinity;
 
     for (const b of candidates) {
-      const currIdx = nearestIndexOnPolyline(lineRoute, [b.latitude, b.longitude]);
+      const currPos: LatLng = [b.latitude, b.longitude];
+      const currDist = distMeters(currPos, boardPos);
       const prev = busPrevRef.current.get(b.id);
-      busPrevRef.current.set(b.id, { idx: currIdx, ts: now });
+      busPrevRef.current.set(b.id, { pos: currPos, ts: now });
 
-      // Need at least 2 points in time to infer direction
+      // Need at least 2 ticks to know direction
       if (!prev) continue;
 
-      const fwdMove = forwardArcMeters(cum, prev.idx, currIdx);
-      const backMove = forwardArcMeters(cum, currIdx, prev.idx);
-      const goingForward = fwdMove <= backMove;
+      // Only consider buses whose distance to the board stop is shrinking
+      const approaching = currDist < distMeters(prev.pos, boardPos);
+      if (!approaching) continue;
 
-      // ignore buses going away (for this polyline orientation)
-      if (!goingForward) continue;
-
-      const metersToBoard = forwardArcMeters(cum, currIdx, stopIdx);
-      if (metersToBoard < bestMeters) {
-        bestMeters = metersToBoard;
+      if (currDist < bestDist) {
+        bestDist = currDist;
         bestId = b.id;
       }
     }
 
-    // fallback (first tick / no history): prefer the bus the API already scored, else nearest
+    // Fallback (first tick / no history yet): prefer the API's scored pick, else nearest
     if (!bestId) {
       const apiPick = plan.closestBusId && candidates.find((b) => b.id === plan.closestBusId);
       if (apiPick) {
@@ -675,7 +627,7 @@ export default function BusMap() {
         let fallback: string | null = null;
         let bestD = Infinity;
         for (const b of candidates) {
-          const d = distMeters([b.latitude, b.longitude], boardStop.position);
+          const d = distMeters([b.latitude, b.longitude], boardPos);
           if (d < bestD) { bestD = d; fallback = b.id; }
         }
         setClosestPlannedBusId(fallback);
@@ -684,7 +636,7 @@ export default function BusMap() {
     }
 
     setClosestPlannedBusId(bestId);
-  }, [plan, buses, routes, routeCumByLine]);
+  }, [plan, buses]);
 
   // ---------- stop markers ----------
   const busStopMarkers = useMemo(() => {
