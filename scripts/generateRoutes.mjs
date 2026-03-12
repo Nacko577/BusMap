@@ -4,6 +4,9 @@
  * Run locally to (re)generate public/routes.json from the collected GPS traces.
  *   node scripts/generateRoutes.mjs
  *
+ * Options:
+ *   --only 110,113   Only reprocess these comma-separated lines, merging into existing routes.json
+ *
  * Requires Node 18+ (built-in fetch). No extra dependencies.
  * After running, commit public/routes.json so Vercel can serve it as a static asset.
  */
@@ -14,6 +17,12 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
+
+// ---------- CLI args ----------
+const onlyIdx = process.argv.indexOf("--only");
+const onlyLines = onlyIdx !== -1 && process.argv[onlyIdx + 1]
+  ? new Set(process.argv[onlyIdx + 1].split(",").map(s => s.trim()))
+  : null;
 
 // ---------- geometry utils ----------
 function approxMetersPerDegLng(latDeg) {
@@ -138,7 +147,9 @@ function cleanRoute(raw) {
   const despiked = removeSpikes(denoised);
   const simplified = simplifyRDP(despiked, 6);
   const guarded = enforceMaxSegment(despiked, simplified, 60);
-  return guarded.length >= 2 ? guarded : d;
+  const result = guarded.length >= 2 ? guarded : d;
+  // Cap to avoid runaway point counts from enforceMaxSegment re-inserting raw points
+  return result.length > 2000 ? subsample(result, 2000) : result;
 }
 
 // ---------- OSRM ----------
@@ -151,26 +162,37 @@ function subsample(coords, maxPts) {
   return out;
 }
 
-async function snapToRoads(coords) {
-  try {
-    // Route API: give it ~10 evenly-spaced waypoints, OSRM fills in the road geometry between them
-    const sample = subsample(coords, 10);
-    const coordStr = sample.map(c => `${c[1].toFixed(5)},${c[0].toFixed(5)}`).join(";");
-    const url = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) {
-      console.warn(`    OSRM returned ${res.status}: ${await res.text().then(t => t.slice(0,120))}`);
-      return null;
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function snapToRoads(coords, retries = 3) {
+  // Route API: finds the actual road path between waypoints.
+  // Better than match API for sparse GPS data — no straight-line gaps.
+  const sample = subsample(coords, 10);
+  const coordStr = sample.map(c => `${c[1].toFixed(5)},${c[0].toFixed(5)}`).join(";");
+  const url = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.code === "Ok" && data.routes?.length) {
+          const out = data.routes[0].geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+          if (out.length >= 2) return out;
+        }
+        console.warn(`    OSRM attempt ${attempt}/${retries}: bad response (code=${data.code}, message=${data.message ?? ""})`);
+      } else {
+        const body = await res.text().then(t => t.slice(0, 200));
+        console.warn(`    OSRM attempt ${attempt}/${retries} status ${res.status}: ${body}`);
+      }
+    } catch (e) {
+      console.warn(`    OSRM attempt ${attempt}/${retries} error: ${e.message}`);
     }
-    const data = await res.json();
-    if (data.code !== "Ok" || !data.routes?.length) return null;
-    const out = [];
-    for (const [lng, lat] of data.routes[0].geometry.coordinates) out.push([lat, lng]);
-    return out.length >= 2 ? out : null;
-  } catch (e) {
-    console.warn(`    OSRM error: ${e.message}`);
-    return null;
+    if (attempt < retries) await sleep(attempt * 4000);
   }
+  return null;
 }
 
 // ---------- main ----------
@@ -184,26 +206,42 @@ async function main() {
     process.exit(1);
   }
 
-  // Combine ALL buses' traces per line (instead of picking the longest single one).
-  // This means bus A covering the east half and bus B covering the west half
-  // both contribute waypoints, giving OSRM full route coverage.
+  const outPath = join(ROOT, "public", "routes.json");
+
+  // Load existing routes so --only mode can merge into them
+  let existingResult = {};
+  try {
+    existingResult = JSON.parse(readFileSync(outPath, "utf-8"));
+  } catch {
+    // no existing file, start fresh
+  }
+
   const allByLine = {};
   for (const [, r] of Object.entries(raw)) {
     const line = (r?.line ?? "?").toString().trim() || "?";
     const coord = Array.isArray(r?.coord) ? r.coord : [];
     if (coord.length < 2) continue;
     if (line === "NO_LINE" || line.startsWith("NO_") || line === "?" || line === "0" || line.endsWith(".")) continue;
+    if (line === "10500" || line === "999H") continue;
     if (!allByLine[line]) allByLine[line] = [];
-    // Take only the most recent 6000 points per bus before merging
     allByLine[line].push(...coord.slice(-6000));
   }
 
-  const lines = Object.keys(allByLine).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  console.log(`Found ${lines.length} lines: ${lines.join(", ")}\n`);
+  let lines = Object.keys(allByLine).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
-  const result = {};
+  if (onlyLines) {
+    const missing = [...onlyLines].filter(l => !allByLine[l]);
+    if (missing.length) console.warn(`Warning: no GPS data found for lines: ${missing.join(", ")}`);
+    lines = lines.filter(l => onlyLines.has(l));
+    console.log(`--only mode: processing lines ${lines.join(", ")}\n`);
+  } else {
+    console.log(`Found ${lines.length} lines: ${lines.join(", ")}\n`);
+  }
+
+  const result = onlyLines ? { ...existingResult } : {};
 
   for (const line of lines) {
+    await sleep(1000);
     const combined = allByLine[line];
     console.log(`Line ${line}: ${combined.length} combined raw points`);
 
@@ -211,19 +249,19 @@ async function main() {
     if (coord.length < 2) { console.log("  Skipped (too few points after cleaning)\n"); continue; }
     console.log(`  Cleaned → ${coord.length} points, snapping to roads…`);
 
-    const snapped = await snapToRoads(coord);  // subsamples to 10 evenly-spaced waypoints
+    const snapped = await snapToRoads(coord);
     if (snapped) {
       console.log(`  Snapped → ${snapped.length} road points ✓\n`);
       result[line] = { line, coord: snapped };
     } else {
-      console.log(`  OSRM failed, keeping cleaned GPS trace\n`);
+      console.log(`  OSRM failed after all retries, keeping cleaned GPS trace\n`);
       result[line] = { line, coord };
     }
   }
 
-  const outPath = join(ROOT, "public", "routes.json");
   writeFileSync(outPath, JSON.stringify(result));
   console.log(`Wrote ${Object.keys(result).length} routes → public/routes.json`);
+  if (onlyLines) console.log("(Other lines preserved from existing routes.json)");
   console.log("Commit this file and deploy to Vercel.");
 }
 

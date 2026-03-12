@@ -67,7 +67,9 @@ function normaliseBus(
 
   if (status !== "on") return null;
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const BLOCKED_LINES = new Set(["10500", "999H"]);
   if (!lineRaw || lineRaw === "NO_LINE" || lineRaw.startsWith("NO_") || lineRaw === "0" || lineRaw.endsWith(".")) return null;
+  if (BLOCKED_LINES.has(lineRaw)) return null;
 
   return { id, lat, lng, line: lineRaw };
 }
@@ -98,7 +100,7 @@ export async function GET() {
 
     const MAX_POINTS = 6000;
     const MIN_MOVE_M = 8;
-    const MAX_JUMP_M = 350;
+    const MAX_JUMP_M = 1500;
 
     for (const [busId, entry] of Object.entries(normalized)) {
       const lat = Number(entry["2"]);
