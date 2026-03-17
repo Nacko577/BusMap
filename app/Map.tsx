@@ -218,6 +218,15 @@ export default function BusMap() {
   const [selectedLine, setSelectedLine] = useState<LineMode>("BUSES_ONLY");
 
   const [isDarkMap, setIsDarkMap] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [isPanelOpen, setIsPanelOpen] = useState(true);
+  const [showBusStops, setShowBusStops] = useState(true);
+
+  useEffect(() => {
+    const mobile = window.innerWidth < 640;
+    setIsMobile(mobile);
+    if (mobile) setIsPanelOpen(false);
+  }, []);
 
   // --- nearest bus to me (filter-aware) ---
   const [trackingNearest, setTrackingNearest] = useState(false);
@@ -644,7 +653,11 @@ export default function BusMap() {
     const transferId = plan && plan.ok && plan.kind === "transfer" ? plan.transferStopId ?? null : null;
     const destId = plan && plan.ok ? plan.destStopId : destStopId || null;
 
-    return SUCEAVA_BUS_STOPS.map((stop) => {
+    const visibleStops = isSpecificLine(selectedLine)
+      ? SUCEAVA_BUS_STOPS.filter((s) => s.lines?.includes(selectedLine))
+      : SUCEAVA_BUS_STOPS;
+
+    return visibleStops.map((stop) => {
       const kind: StopKind =
         destId === stop.id
           ? "dest"
@@ -659,55 +672,97 @@ export default function BusMap() {
       return (
         <Marker key={stop.id} position={stop.position as unknown as LatLngTuple} icon={icon}>
           <Popup>
-            <div style={{ minWidth: 220 }}>
-              <strong>{stop.name}</strong>
-              <br />
-              <strong>ID:</strong> {stop.id}
-              <br />
-              <strong>Lines:</strong> {stop.lines?.length ? stop.lines.join(", ") : "—"}
-              <hr style={{ margin: "10px 0" }} />
+            <div style={{ minWidth: 200, fontFamily: "system-ui, sans-serif" }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#111827", marginBottom: 8 }}>
+                {stop.name}
+              </div>
+              {stop.lines?.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10 }}>
+                  {stop.lines.map((l: string) => (
+                    <span
+                      key={l}
+                      style={{
+                        background: isDarkMap ? "#15803d" : "#2563eb",
+                        color: "#fff",
+                        borderRadius: 6,
+                        padding: "2px 8px",
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {l}
+                    </span>
+                  ))}
+                </div>
+              )}
               <button
                 onClick={() => setDestStopId(stop.id)}
                 style={{
                   width: "100%",
                   padding: "8px 10px",
-                  borderRadius: 10,
-                  border: "1px solid #e5e7eb",
-                  background: "#f9fafb",
+                  borderRadius: 8,
+                  border: "none",
+                  background: isDarkMap ? "#15803d" : "#2563eb",
+                  color: "#fff",
                   fontSize: 13,
-                  fontWeight: 900,
+                  fontWeight: 700,
                   cursor: "pointer",
                 }}
               >
-                🧭 Plan to this stop
+                🧭 Planifică până aici
               </button>
             </div>
           </Popup>
         </Marker>
       );
     });
-  }, [isDarkMap, plan, destStopId]);
+  }, [isDarkMap, plan, destStopId, selectedLine]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       {/* UI overlay */}
+      <div style={{ position: "absolute", top: 16, right: 16, zIndex: 1000 }}>
+        {/* Mobile toggle button */}
+        {isMobile && (
+          <button
+            onClick={() => setIsPanelOpen((v) => !v)}
+            style={{
+              marginLeft: "auto",
+              marginBottom: isPanelOpen ? 8 : 0,
+              width: 40,
+              height: 40,
+              display: "flex",
+              borderRadius: 10,
+              border: "none",
+              background: isDarkMap ? "#1f2937" : "#ffffff",
+              color: isDarkMap ? "#f9fafb" : "#111827",
+              fontSize: 18,
+              cursor: "pointer",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            aria-label={isPanelOpen ? "Închide meniu" : "Deschide meniu"}
+          >
+            {isPanelOpen ? "✕" : "☰"}
+          </button>
+        )}
+
+        {(!isMobile || isPanelOpen) && (
       <div
         style={{
-          position: "absolute",
-          top: 16,
-          right: 16,
-          zIndex: 1000,
-          background: "#ffffff",
+          background: isDarkMap ? "#111827" : "#ffffff",
+          color: isDarkMap ? "#f9fafb" : "#111827",
           padding: "14px 16px",
           borderRadius: 14,
           boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
           display: "flex",
           flexDirection: "column",
           gap: 10,
-          minWidth: 280,
+          width: isMobile ? "calc(100vw - 32px)" : 280,
         }}
       >
-        <div style={{ fontSize: 14, fontWeight: 800, color: "#1f2937", textAlign: "center" }}>Linii</div>
+        <div style={{ fontSize: 14, fontWeight: 800, color: isDarkMap ? "#f9fafb" : "#1f2937", textAlign: "center" }}>Linii</div>
 
         <select
           value={selectedLine}
@@ -828,6 +883,22 @@ export default function BusMap() {
           </button>
         </div>
 
+        <button
+          onClick={() => setShowBusStops((v) => !v)}
+          style={{
+            padding: "8px 10px",
+            borderRadius: 10,
+            border: "1px solid #e5e7eb",
+            background: showBusStops ? (isDarkMap ? "#1f2937" : "#f9fafb") : (isDarkMap ? "#374151" : "#e5e7eb"),
+            color: isDarkMap ? "#f9fafb" : "#374151",
+            fontSize: 13,
+            fontWeight: 900,
+            cursor: "pointer",
+          }}
+        >
+          {showBusStops ? "🟡 Ascunde stații" : "🟡 Arată stații"}
+        </button>
+
         {planLoading && (
           <div style={{ fontSize: 12, fontWeight: 900, color: "#374151" }}>⏳ Se calculează…</div>
         )}
@@ -939,6 +1010,8 @@ export default function BusMap() {
           );
         })()}
       </div>
+        )}
+      </div>
 
       <MapContainer center={[47.67109, 26.27769]} zoom={13} scrollWheelZoom preferCanvas>
         <TileLayer key={isDarkMap ? "dark" : "light"} attribution={tileConfig.attribution} url={tileConfig.url} />
@@ -946,7 +1019,7 @@ export default function BusMap() {
         {/* Planned route overrides everything */}
         {showOnlyPlannedRoute ? planPolylines : routePolylines}
 
-        {busStopMarkers}
+        {showBusStops && busStopMarkers}
 
         {trackingNearest && userPos && (
           <Marker position={userPos} icon={createUserIcon(isDarkMap)}>
